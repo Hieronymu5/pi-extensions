@@ -66,7 +66,6 @@ interface SpringInitResult {
   packageName: string;
   packaging: string;
   javaVersion: string;
-  applicationFormat: string;
 }
 
 const FIELDS_PER_PAGE = 4;
@@ -146,28 +145,6 @@ class SpringInitForm extends Container implements Focusable {
       },
       {
         index: 5,
-        label: "Package Name",
-        field: "name",
-        type: "text",
-        defaultValue: metadata?.name?.default || "DemoApplication",
-      },
-      {
-        index: 6,
-        label: "Description",
-        field: "description",
-        type: "text",
-        defaultValue:
-          metadata?.description?.default || "Demo project for Spring Boot",
-      },
-      {
-        index: 7,
-        label: "Package",
-        field: "packageName",
-        type: "text",
-        defaultValue: "com.example.demo",
-      },
-      {
-        index: 8,
         label: "Packaging",
         field: "packaging",
         type: "select",
@@ -175,20 +152,12 @@ class SpringInitForm extends Container implements Focusable {
         defaultValue: metadata?.packaging?.default,
       },
       {
-        index: 9,
+        index: 6,
         label: "Java Version",
         field: "javaVersion",
         type: "select",
         options: this.getJavaVersionOptions(),
         defaultValue: metadata?.javaVersion?.default,
-      },
-      {
-        index: 10,
-        label: "Application Format",
-        field: "applicationFormat",
-        type: "select",
-        options: this.getApplicationFormatOptions(),
-        defaultValue: "project",
       },
     ];
 
@@ -239,47 +208,11 @@ class SpringInitForm extends Container implements Focusable {
     }));
   }
 
-  private getApplicationFormatOptions(): SelectItem[] {
-    // Derive from type values - format tag
-    const formatSet = new Set<string>();
-    if (this.metadata?.type?.values) {
-      for (const v of this.metadata.type.values) {
-        if (v.tags?.format) {
-          formatSet.add(v.tags.format);
-        }
-      }
-    }
-
-    // Ensure we have both project and build options
-    const options: SelectItem[] = [];
-    if (formatSet.has("project")) {
-      options.push({
-        value: "project",
-        label: "Project",
-        description: "Full project with source code",
-      });
-    }
-    if (formatSet.has("build")) {
-      options.push({
-        value: "build",
-        label: "Build File Only",
-        description: "Just build configuration (pom.xml or build.gradle)",
-      });
-    }
-
-    // Fallback defaults
-    if (options.length === 0) {
-      options.push({ value: "project", label: "Project" });
-      options.push({ value: "build", label: "Build File" });
-    }
-
-    return options;
-  }
-
   private createComponents(): void {
     for (const field of this.fields) {
       if (field.type === "text") {
-        const input = new Input(field.defaultValue || "");
+        const input = new Input();
+        input.setValue(field.defaultValue || "");
         this.inputs.set(field.index, input);
       } else if (field.type === "select" && field.options) {
         const maxVisible = Math.min(field.options.length, 5);
@@ -291,7 +224,12 @@ class SpringInitForm extends Container implements Focusable {
           noMatch: (text) => this.theme.fg("warning", text),
         });
         if (field.defaultValue) {
-          selectList.value = field.defaultValue;
+          const defaultIndex = field.options.findIndex(
+            (opt) => opt.value === field.defaultValue,
+          );
+          if (defaultIndex >= 0) {
+            selectList.setSelectedIndex(defaultIndex);
+          }
         }
         // When the user confirms a selection (Enter), advance to the next
         // field (or submit if this is the last field).
@@ -471,6 +409,14 @@ class SpringInitForm extends Container implements Focusable {
         return;
       }
 
+      // Only allow [a-z.] for identifier fields
+      if (
+        (field.field === "groupId" || field.field === "artifactId") &&
+        !this.isAllowedIdChar(keyData)
+      ) {
+        return;
+      }
+
       input?.handleInput(keyData);
     } else if (field.type === "select") {
       // Pass everything to SelectList — it handles ↑↓ for navigation
@@ -482,18 +428,36 @@ class SpringInitForm extends Container implements Focusable {
     this.invalidate();
   }
 
+  /** Returns true if keyData is allowed to reach a groupId / artifactId Input. */
+  private isAllowedIdChar(keyData: string): boolean {
+    // Pass through non-printable keys (backspace, arrows, ctrl sequences, …)
+    if (keyData.length !== 1 || keyData.charCodeAt(0) < 32) {
+      return true;
+    }
+    // Only lowercase a-z and dot are permitted
+    return /^[a-z.]$/.test(keyData);
+  }
+
   private getResult(): SpringInitResult {
     const result: any = {};
 
     for (const field of this.fields) {
       if (field.type === "text") {
         const input = this.inputs.get(field.index);
-        result[field.field] = input?.value || "";
+        result[field.field] = input?.getValue() || "";
       } else if (field.type === "select") {
         const select = this.selects.get(field.index);
-        result[field.field] = select?.value || field.defaultValue || "";
+        result[field.field] =
+          select?.getSelectedItem()?.value || field.defaultValue || "";
       }
     }
+
+    // Derive hidden fields from visible ones
+    const groupId = result.groupId || "com.example";
+    const artifactId = result.artifactId || "demo";
+    result.name = artifactId;
+    result.description = "Demo project for Spring Boot";
+    result.packageName = `${groupId}.${artifactId}`;
 
     return result as SpringInitResult;
   }
