@@ -772,8 +772,15 @@ class SpringInitForm extends Container implements Focusable {
 
     // Visible fields
     for (const field of visibleFields) {
+      const isActive = field.index === this.activeField;
       const fieldLabel = `${field.index + 1}. ${field.label}:`;
-      this.addChild(new Text(this.theme.fg("text", fieldLabel)));
+      this.addChild(
+        new Text(
+          isActive
+            ? this.theme.fg("accent", this.theme.bold(fieldLabel))
+            : this.theme.fg("text", fieldLabel),
+        ),
+      );
 
       if (field.type === "text") {
         const input = this.inputs.get(field.index)!;
