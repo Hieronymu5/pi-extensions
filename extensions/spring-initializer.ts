@@ -1260,6 +1260,110 @@ class ConfirmationComponent extends Container {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ExtractionLocationComponent
+// ─────────────────────────────────────────────────────────────────────────────
+
+class ExtractionLocationComponent extends Container implements Focusable {
+  private readonly theme: Theme;
+  private readonly selectList: SelectList;
+  private readonly onChooseCallback: (useProjectFolder: boolean | null) => void;
+
+  private _focused = false;
+
+  get focused(): boolean {
+    return this._focused;
+  }
+
+  set focused(value: boolean) {
+    this._focused = value;
+    this.selectList.focused = value;
+  }
+
+  constructor(
+    theme: Theme,
+    artifactId: string,
+    onChoose: (useProjectFolder: boolean | null) => void,
+  ) {
+    super();
+    this.theme = theme;
+    this.onChooseCallback = onChoose;
+
+    this.selectList = new SelectList(
+      [
+        {
+          value: "project",
+          label: "New project folder",
+          description: `./${artifactId}/`,
+        },
+        {
+          value: "current",
+          label: "Current folder",
+          description: "./",
+        },
+      ],
+      2,
+      {
+        selectedPrefix: (s) => theme.fg("accent", s),
+        selectedText: (s) => theme.fg("accent", s),
+        description: (s) => theme.fg("muted", s),
+        scrollInfo: (s) => theme.fg("dim", s),
+        noMatch: (s) => theme.fg("warning", s),
+      },
+    );
+
+    this.selectList.onSelect = () => {
+      const val = this.selectList.getSelectedItem()?.value;
+      onChoose(val === "project");
+    };
+
+    this.rebuild();
+  }
+
+  private rebuild(): void {
+    this.clear();
+    const t = this.theme;
+
+    this.addChild(new DynamicBorder((s: string) => t.fg("accent", s)));
+    this.addChild(
+      new Text(t.fg("accent", t.bold("Extraction Location")), 1, 0),
+    );
+    this.addChild(
+      new Text(
+        t.fg("muted", "Where should the project files be extracted?"),
+        1,
+        0,
+      ),
+    );
+    this.addChild(new Text(""));
+    this.addChild(this.selectList);
+    this.addChild(new Text(""));
+    this.addChild(
+      new Text(
+        t.fg("dim", "↑↓ navigate • Enter confirm • Esc cancel"),
+        1,
+        0,
+      ),
+    );
+    this.addChild(new DynamicBorder((s: string) => t.fg("accent", s)));
+
+    this.selectList.focused = this._focused;
+  }
+
+  handleInput(keyData: string): void {
+    if (matchesKey(keyData, Key.escape)) {
+      this.onChooseCallback(null);
+      return;
+    }
+    this.selectList.handleInput(keyData);
+  }
+
+  override invalidate(): void {
+    super.invalidate();
+    this.rebuild();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Helper: run a TUI overlay and return the result
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1401,7 +1505,32 @@ export default function springInitializer(pi: ExtensionAPI) {
         return;
       }
 
-      // ── Step 4: Download ───────────────────────────────────────────────────
+      // ── Step 4: Extraction location ────────────────────────────────────────
+      const useProjectFolder = await ctx.ui.custom<boolean | null>(
+        (tui, theme, _kb, done) =>
+          makeRootWrapper(tui, () =>
+            new ExtractionLocationComponent(
+              theme,
+              finalResult.artifactId,
+              (choice) => done(choice),
+            ),
+          ),
+        {
+          overlay: true,
+          overlayOptions: {
+            width: "55%",
+            maxHeight: "35%",
+            anchor: "center",
+          },
+        },
+      );
+
+      if (useProjectFolder === null) {
+        ctx.ui.notify("Project generation cancelled.", "warning");
+        return;
+      }
+
+      // ── Step 5: Download ───────────────────────────────────────────────────
       const downloadUrl = buildDownloadUrl(meta, finalResult);
 
       type DownloadResult =
@@ -1448,7 +1577,7 @@ export default function springInitializer(pi: ExtensionAPI) {
         },
       );
 
-      // ── Step 5: Extract or report error ───────────────────────────────────
+      // ── Step 6: Extract or report error ───────────────────────────────────
       if (dlResult === null) {
         ctx.ui.notify("Download cancelled.", "warning");
         return;
@@ -1464,13 +1593,18 @@ export default function springInitializer(pi: ExtensionAPI) {
 
       try {
         const zipBuffer = Buffer.from(dlResult.buffer);
-        const projectDir = path.join(ctx.cwd, finalResult.artifactId);
-        fs.mkdirSync(projectDir, { recursive: true });
-        extractZip(zipBuffer, projectDir);
+        const targetDir = useProjectFolder
+          ? path.join(ctx.cwd, finalResult.artifactId)
+          : ctx.cwd;
+
+        if (useProjectFolder) {
+          fs.mkdirSync(targetDir, { recursive: true });
+        }
+        extractZip(zipBuffer, targetDir);
 
         const depCount = finalResult.dependencies.length;
         ctx.ui.notify(
-          `✓ Project extracted to ${projectDir}` +
+          `✓ Project extracted to ${targetDir}` +
             (depCount > 0
               ? ` (${depCount} dependenc${depCount === 1 ? "y" : "ies"})`
               : ""),
