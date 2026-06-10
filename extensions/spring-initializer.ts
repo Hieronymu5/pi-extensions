@@ -430,8 +430,8 @@ class SpringInitForm extends Container implements Focusable {
 
   /** Returns true if keyData is allowed to reach a groupId / artifactId Input. */
   private isAllowedIdChar(keyData: string): boolean {
-    // Pass through non-printable keys (backspace, arrows, ctrl sequences, …)
-    if (keyData.length !== 1 || keyData.charCodeAt(0) < 32) {
+    // Pass through non-printable keys (charCode < 32) and DEL/backspace (charCode 127).
+    if (keyData.length !== 1 || keyData.charCodeAt(0) < 32 || keyData.charCodeAt(0) === 127) {
       return true;
     }
     // Only lowercase a-z and dot are permitted
@@ -535,34 +535,9 @@ export default function springInitializer(pi: ExtensionAPI) {
       );
 
       if (result) {
-        // Clean up bootVersion suffixes
-        result.bootVersion = result.bootVersion
-          .replace(".RELEASE", "")
-          .replace(".BUILD-SNAPSHOT", "-SNAPSHOT");
-
-        // Build the Spring Initializr URL
-        const baseUrl = "https://start.spring.io/starter.zip";
-        const params = new URLSearchParams();
-        params.set("type", result.type);
-        params.set("language", result.language);
-        params.set("bootVersion", result.bootVersion);
-        params.set("groupId", result.groupId);
-        params.set("artifactId", result.artifactId);
-        params.set("name", result.name);
-        params.set("description", result.description);
-        params.set("packageName", result.packageName);
-        params.set("packaging", result.packaging);
-        params.set("javaVersion", result.javaVersion);
-
-        const fullUrl = `${baseUrl}?${params.toString()}`;
-
-        ctx.ui.notify(`Spring project configured! URL: ${fullUrl}`, "success");
-
-        // Also output as details for copying
-        console.log("Spring Initializr URL:");
-        console.log(fullUrl);
-        console.log("\nProject Configuration:");
-        console.log(JSON.stringify(result, null, 2));
+        const json = JSON.stringify(result, null, 2);
+        console.log(json);
+        ctx.ui.notify("Spring project configured!", "success");
       }
     },
   });

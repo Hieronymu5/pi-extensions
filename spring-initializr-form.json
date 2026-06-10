@@ -1,0 +1,83 @@
+{
+  "title": "Spring Initializr",
+  "description": "Configure a new Spring Boot project",
+  "overlayWidth": "70%",
+  "overlayMaxHeight": "80%",
+  "fieldsPerPage": 4,
+  "fields": [
+    {
+      "id": "type",
+      "label": "Project Type",
+      "type": "select",
+      "default": "gradle-project",
+      "options": [
+        { "value": "gradle-project", "label": "Gradle - Groovy" },
+        { "value": "gradle-project-kotlin", "label": "Gradle - Kotlin" },
+        { "value": "maven-project", "label": "Maven" }
+      ]
+    },
+    {
+      "id": "language",
+      "label": "Language",
+      "type": "select",
+      "default": "java",
+      "options": [
+        { "value": "java", "label": "Java" },
+        { "value": "kotlin", "label": "Kotlin" },
+        { "value": "groovy", "label": "Groovy" }
+      ]
+    },
+    {
+      "id": "bootVersion",
+      "label": "Spring Boot Version",
+      "type": "select",
+      "default": "4.0.6.RELEASE",
+      "options": [
+        { "value": "4.1.0.BUILD-SNAPSHOT", "label": "4.1.0 (SNAPSHOT)" },
+        { "value": "4.1.0.RC1", "label": "4.1.0 (RC1)" },
+        { "value": "4.0.7.BUILD-SNAPSHOT", "label": "4.0.7 (SNAPSHOT)" },
+        { "value": "4.0.6.RELEASE", "label": "4.0.6" },
+        { "value": "3.5.15.BUILD-SNAPSHOT", "label": "3.5.15 (SNAPSHOT)" },
+        { "value": "3.5.14.RELEASE", "label": "3.5.14" }
+      ]
+    },
+    {
+      "id": "groupId",
+      "label": "Group",
+      "type": "text",
+      "default": "com.example",
+      "validation": "identifier",
+      "hint": "e.g. com.example  (lowercase letters and dots only)"
+    },
+    {
+      "id": "artifactId",
+      "label": "Artifact",
+      "type": "text",
+      "default": "demo",
+      "validation": "identifier",
+      "hint": "e.g. demo  (lowercase letters and dots only)"
+    },
+    {
+      "id": "packaging",
+      "label": "Packaging",
+      "type": "select",
+      "default": "jar",
+      "options": [
+        { "value": "jar", "label": "Jar" },
+        { "value": "war", "label": "War" }
+      ]
+    },
+    {
+      "id": "javaVersion",
+      "label": "Java Version",
+      "type": "select",
+      "default": "17",
+      "options": [
+        { "value": "26", "label": "26" },
+        { "value": "25", "label": "25" },
+        { "value": "21", "label": "21" },
+        { "value": "17", "label": "17" }
+      ]
+    }
+  ]
+}
