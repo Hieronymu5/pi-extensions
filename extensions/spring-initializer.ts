@@ -273,7 +273,7 @@ const MAX_DEPS_VISIBLE = 7;
 class DependencyPickerComponent extends Container implements Focusable {
   private readonly theme: Theme;
   private readonly allCompatibleDeps: FlatDependency[];
-  private readonly onDoneCallback: (selectedIds: string[]) => void;
+  private readonly onDoneCallback: (selectedIds: string[] | null) => void;
   private readonly searchInput: Input;
 
   private _focused = false;
@@ -297,7 +297,8 @@ class DependencyPickerComponent extends Container implements Focusable {
     theme: Theme,
     meta: any,
     bootVersion: string,
-    onDone: (selectedIds: string[]) => void,
+    onDone: (selectedIds: string[] | null) => void,
+    initialSelectedIds?: string[],
   ) {
     super();
     this.theme = theme;
@@ -306,6 +307,14 @@ class DependencyPickerComponent extends Container implements Focusable {
     this.filteredDeps = [...this.allCompatibleDeps];
     this.searchInput = new Input();
     this.searchInput.setValue("");
+    // Pre-populate selected IDs from a previous edit (only compatible ones)
+    if (initialSelectedIds) {
+      for (const id of initialSelectedIds) {
+        if (this.allCompatibleDeps.some((d) => d.id === id)) {
+          this.selectedIds.add(id);
+        }
+      }
+    }
     this.rebuild();
   }
 
@@ -450,7 +459,7 @@ class DependencyPickerComponent extends Container implements Focusable {
       new Text(
         t.fg(
           "dim",
-          "↑↓ navigate • Space/Enter toggle • Esc confirm selection",
+          "↑↓ navigate • Space toggle • Enter confirm • Esc cancel",
         ),
         1,
         0,
@@ -465,9 +474,15 @@ class DependencyPickerComponent extends Container implements Focusable {
   // ── Input routing ────────────────────────────────────────────────────────
 
   handleInput(keyData: string): void {
-    // Escape → done, return current selection
-    if (matchesKey(keyData, Key.escape)) {
+    // Enter → confirm selection
+    if (matchesKey(keyData, Key.enter)) {
       this.onDoneCallback([...this.selectedIds]);
+      return;
+    }
+
+    // Escape → cancel the entire initializer
+    if (matchesKey(keyData, Key.escape)) {
+      this.onDoneCallback(null);
       return;
     }
 
@@ -494,8 +509,8 @@ class DependencyPickerComponent extends Container implements Focusable {
       return;
     }
 
-    // Space / Enter → toggle the highlighted dependency
-    if (matchesKey(keyData, Key.space) || matchesKey(keyData, Key.enter)) {
+    // Space → toggle the highlighted dependency
+    if (matchesKey(keyData, Key.space)) {
       if (this.filteredDeps.length > 0) {
         const dep = this.filteredDeps[this.highlightedIndex];
         if (dep) {
@@ -581,6 +596,7 @@ class SpringInitForm extends Container implements Focusable {
     theme: Theme,
     metadata: any,
     onDone: (result: Omit<SpringInitResult, "dependencies"> | null) => void,
+    initialValues?: Partial<Omit<SpringInitResult, "dependencies">>,
   ) {
     super();
     this.theme = theme;
@@ -645,6 +661,16 @@ class SpringInitForm extends Container implements Focusable {
         defaultValue: metadata?.javaVersion?.default,
       },
     ];
+
+    // Override field defaults with values from a previous edit if provided
+    if (initialValues) {
+      for (const field of this.fields) {
+        const override = (initialValues as Record<string, string>)[field.field];
+        if (override !== undefined) {
+          field.defaultValue = override;
+        }
+      }
+    }
 
     this.createComponents();
     this.rebuildVisibleFields();
@@ -717,14 +743,7 @@ class SpringInitForm extends Container implements Focusable {
           }
         }
         selectList.onSelect = () => {
-          if (this.activeField >= this.fields.length - 1) {
-            this.onDoneCallback(this.getResult());
-          } else {
-            this.activeField = this.activeField + 1;
-            this.updateWindowStart();
-            this.rebuildVisibleFields();
-            this.invalidate();
-          }
+          this.onDoneCallback(this.getResult());
         };
         this.selects.set(field.index, selectList);
       }
@@ -821,7 +840,7 @@ class SpringInitForm extends Container implements Focusable {
       new Text(
         this.theme.fg(
           "dim",
-          "↑↓ navigate options • Tab/Shift+Tab switch fields • Enter confirm/submit • Esc cancel",
+          "↑↓ navigate options • Tab next field • Shift+Tab prev field • Enter submit • Esc cancel",
         ),
       ),
     );
@@ -873,14 +892,7 @@ class SpringInitForm extends Container implements Focusable {
       const input = this.inputs.get(field.index);
 
       if (matchesKey(keyData, Key.enter)) {
-        if (this.activeField >= this.fields.length - 1) {
-          this.onDoneCallback(this.getResult());
-        } else {
-          this.activeField++;
-          this.updateWindowStart();
-          this.rebuildVisibleFields();
-          this.invalidate();
-        }
+        this.onDoneCallback(this.getResult());
         return;
       }
 
@@ -1155,13 +1167,13 @@ class ConfirmationComponent extends Container {
   /** Satisfies the focused-property contract; no input widgets need IME. */
   focused = false;
 
-  private readonly onConfirm: (confirmed: boolean) => void;
+  private readonly onConfirm: (action: "confirm" | "cancel" | "edit") => void;
 
   constructor(
     theme: Theme,
     result: SpringInitResult,
     meta: any,
-    onConfirm: (confirmed: boolean) => void,
+    onConfirm: (action: "confirm" | "cancel" | "edit") => void,
   ) {
     super();
     this.onConfirm = onConfirm;
@@ -1245,7 +1257,7 @@ class ConfirmationComponent extends Container {
     this.addChild(new Text(""));
     this.addChild(
       new Text(
-        t.fg("dim", "  Enter / Y  generate project     Esc / N  cancel"),
+        t.fg("dim", "  Enter / Y  generate     E  edit settings     Esc / N  cancel"),
         0,
         0,
       ),
@@ -1255,13 +1267,15 @@ class ConfirmationComponent extends Container {
 
   handleInput(keyData: string): void {
     if (matchesKey(keyData, Key.enter) || keyData === "y" || keyData === "Y") {
-      this.onConfirm(true);
+      this.onConfirm("confirm");
+    } else if (keyData === "e" || keyData === "E") {
+      this.onConfirm("edit");
     } else if (
       matchesKey(keyData, Key.escape) ||
       keyData === "n" ||
       keyData === "N"
     ) {
-      this.onConfirm(false);
+      this.onConfirm("cancel");
     }
   }
 }
@@ -1408,13 +1422,142 @@ function makeRootWrapper(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Arg parsing helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Parses the slash-command argument string and returns field overrides and a
+ * list of dependency IDs to pre-select.
+ *
+ * Token recognition rules (case-insensitive):
+ *  • java / kotlin / groovy              → language
+ *  • maven                               → type = maven-project
+ *  • gradle                              → type = gradle-project
+ *  • plain integer (e.g. 17, 21, 11, 8) → javaVersion (matched against
+ *                                          known values in metadata)
+ *  • anything else                       → dependency ID (exact, then fuzzy)
+ */
+function parseSpringInitArgs(
+  argsStr: string,
+  meta: any,
+): {
+  overrides: Partial<Omit<SpringInitResult, "dependencies">>;
+  depIds: string[];
+} {
+  const tokens = (argsStr ?? "").trim().split(/\s+/).filter(Boolean);
+  const overrides: Partial<Omit<SpringInitResult, "dependencies">> = {};
+  const depIds: string[] = [];
+
+  if (tokens.length === 0) return { overrides, depIds };
+
+  const validLanguages = new Set<string>(
+    (meta?.language?.values ?? []).map((v: any) => (v.id as string).toLowerCase()),
+  );
+  const validJavaVersions: string[] = (meta?.javaVersion?.values ?? []).map(
+    (v: any) => v.id as string,
+  );
+
+  // Use the metadata default boot version for dep compatibility filtering.
+  const defaultBootVersion: string = meta?.bootVersion?.default ?? "";
+  const allDeps = getCompatibleDependencies(meta, defaultBootVersion);
+
+  for (const token of tokens) {
+    const lower = token.toLowerCase();
+
+    // Language
+    if (validLanguages.has(lower)) {
+      overrides.language = lower;
+      continue;
+    }
+
+    // Build tool
+    if (lower === "maven") {
+      overrides.type = "maven-project";
+      continue;
+    }
+    if (lower === "gradle") {
+      overrides.type = "gradle-project";
+      continue;
+    }
+
+    // Java version — plain integer token ("17", "21", "11", "8", …)
+    if (/^\d+$/.test(token)) {
+      const match = validJavaVersions.find((v) => v === token);
+      if (match) {
+        overrides.javaVersion = match;
+        continue;
+      }
+    }
+
+    // Dependency — exact ID match first, then fuzzy
+    const exactDep = allDeps.find((d) => d.id.toLowerCase() === lower);
+    if (exactDep) {
+      if (!depIds.includes(exactDep.id)) depIds.push(exactDep.id);
+      continue;
+    }
+    const fuzzy = fuzzySearchDeps(lower, allDeps);
+    if (fuzzy.length > 0 && fuzzy[0] && !depIds.includes(fuzzy[0].id)) {
+      depIds.push(fuzzy[0].id);
+    }
+  }
+
+  return { overrides, depIds };
+}
+
+/**
+ * Builds a complete SpringInitResult from metadata defaults, with the parsed
+ * overrides and pre-selected dependency IDs applied on top.
+ */
+function buildDefaultResult(
+  meta: any,
+  overrides: Partial<Omit<SpringInitResult, "dependencies">>,
+  depIds: string[],
+): SpringInitResult {
+  const groupId = overrides.groupId ?? "com.example";
+  const artifactId = overrides.artifactId ?? "demo";
+
+  return {
+    type:
+      overrides.type ??
+      (meta?.type?.default as string | undefined) ??
+      "maven-project",
+    language:
+      overrides.language ??
+      (meta?.language?.default as string | undefined) ??
+      "java",
+    bootVersion:
+      overrides.bootVersion ??
+      (meta?.bootVersion?.default as string | undefined) ??
+      "",
+    groupId,
+    artifactId,
+    name: artifactId,
+    description: "Demo project for Spring Boot",
+    packageName: `${groupId}.${artifactId}`,
+    packaging:
+      overrides.packaging ??
+      (meta?.packaging?.default as string | undefined) ??
+      "jar",
+    javaVersion:
+      overrides.javaVersion ??
+      (meta?.javaVersion?.default as string | undefined) ??
+      "17",
+    dependencies: depIds,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Extension registration
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function springInitializer(pi: ExtensionAPI) {
   pi.registerCommand("spring-init", {
     description:
-      "Open Spring Initializer form to configure a new Spring Boot project",
+      "Open Spring Initializer form to configure a new Spring Boot project. " +
+      "Optional args override defaults — e.g. '/spring-init maven 17 web' sets " +
+      "build tool=Maven, JDK=17 and pre-selects the Spring Web dependency. " +
+      "Recognises: language (java/kotlin/groovy), build tool (maven/gradle), " +
+      "JDK version (integer e.g. 17), and dependency IDs/names (e.g. web, actuator).",
     handler: async (args, ctx) => {
       const meta = await loadMetadata(ctx.cwd);
 
@@ -1431,85 +1574,107 @@ export default function springInitializer(pi: ExtensionAPI) {
         return;
       }
 
-      // ── Step 1: Project configuration form ────────────────────────────────
-      const formResult = await ctx.ui.custom<
-        Omit<SpringInitResult, "dependencies"> | null
-      >(
-        (tui, theme, _keybindings, done) =>
-          makeRootWrapper(tui, () =>
-            new SpringInitForm(
-              theme,
-              meta,
-              (result) => done(result),
-            ),
-          ),
-        {
-          overlay: true,
-          overlayOptions: { width: "60%", maxHeight: "80%", anchor: "center" },
-        },
+      // ── Parse args → build initial result with defaults + overrides ─────────
+      const { overrides, depIds } = parseSpringInitArgs(args ?? "", meta);
+      let currentResult: SpringInitResult = buildDefaultResult(
+        meta,
+        overrides,
+        depIds,
       );
 
-      if (!formResult) {
-        ctx.ui.notify("Spring Initializer cancelled.", "warning");
-        return;
-      }
+      // ── Main loop: Confirmation first, then optional Edit ─────────────────
+      let finalResult!: SpringInitResult;
 
-      // ── Step 2: Dependency picker ──────────────────────────────────────────
-      // The bootVersion value from the form is the FULL version ID (e.g.
-      // "4.0.6.RELEASE"), which is exactly what versionRange filtering needs.
-      const selectedDeps = await ctx.ui.custom<string[]>(
-        (tui, theme, _keybindings, done) =>
-          makeRootWrapper(tui, () =>
-            new DependencyPickerComponent(
+      while (true) {
+        // ── Step 1: Confirmation (shown first with defaults pre-populated) ────
+        const confirmAction = await ctx.ui.custom<"confirm" | "cancel" | "edit">(
+          (tui, theme, _kb, done) => {
+            const comp = new ConfirmationComponent(
               theme,
+              currentResult,
               meta,
-              formResult.bootVersion,
-              (ids) => done(ids),
-            ),
-          ),
-        {
-          overlay: true,
-          overlayOptions: { width: "70%", maxHeight: "85%", anchor: "center" },
-        },
-      );
-
-      const finalResult: SpringInitResult = {
-        ...formResult,
-        dependencies: selectedDeps,
-      };
-
-      // ── Step 3: Confirmation ───────────────────────────────────────────────
-      const confirmed = await ctx.ui.custom<boolean>(
-        (tui, theme, _kb, done) => {
-          const comp = new ConfirmationComponent(
-            theme,
-            finalResult,
-            meta,
-            done,
-          );
-          return {
-            focused: false,
-            render: (w: number) => comp.render(w),
-            invalidate: () => comp.invalidate(),
-            handleInput: (data: string) => {
-              comp.handleInput(data);
-              tui.requestRender();
-            },
-          };
-        },
-        {
-          overlay: true,
-          overlayOptions: {
-            width: "60%",
-            maxHeight: "80%",
-            anchor: "center",
+              done,
+            );
+            return {
+              focused: false,
+              render: (w: number) => comp.render(w),
+              invalidate: () => comp.invalidate(),
+              handleInput: (data: string) => {
+                comp.handleInput(data);
+                tui.requestRender();
+              },
+            };
           },
-        },
-      );
+          {
+            overlay: true,
+            overlayOptions: { width: "60%", maxHeight: "80%", anchor: "center" },
+          },
+        );
 
-      if (!confirmed) {
-        ctx.ui.notify("Project generation cancelled.", "warning");
-        return;
+        if (confirmAction === "cancel") {
+          ctx.ui.notify("Project generation cancelled.", "warning");
+          return;
+        }
+
+        if (confirmAction === "confirm") {
+          finalResult = currentResult;
+          break;
+        }
+
+        // ── Step 2 (edit path): Project configuration form ───────────────────
+        // Spread currentResult so the form receives the latest field values.
+        const { dependencies: _prevDeps, ...formInitialValues } = currentResult;
+        const formResult = await ctx.ui.custom<
+          Omit<SpringInitResult, "dependencies"> | null
+        >(
+          (tui, theme, _keybindings, done) =>
+            makeRootWrapper(tui, () =>
+              new SpringInitForm(
+                theme,
+                meta,
+                (result) => done(result),
+                formInitialValues,
+              ),
+            ),
+          {
+            overlay: true,
+            overlayOptions: { width: "60%", maxHeight: "80%", anchor: "center" },
+          },
+        );
+
+        if (!formResult) {
+          // User cancelled the edit form — loop back to confirmation unchanged.
+          continue;
+        }
+
+        // ── Step 3 (edit path): Dependency picker ────────────────────────────
+        // The bootVersion value from the form is the FULL version ID (e.g.
+        // "4.0.6.RELEASE"), which is exactly what versionRange filtering needs.
+        const selectedDeps = await ctx.ui.custom<string[] | null>(
+          (tui, theme, _keybindings, done) =>
+            makeRootWrapper(tui, () =>
+              new DependencyPickerComponent(
+                theme,
+                meta,
+                formResult.bootVersion,
+                (ids) => done(ids),
+                currentResult.dependencies,
+              ),
+            ),
+          {
+            overlay: true,
+            overlayOptions: { width: "70%", maxHeight: "85%", anchor: "center" },
+          },
+        );
+
+        // Esc in the dependency picker cancels the whole initializer.
+        if (selectedDeps === null) {
+          ctx.ui.notify("Project generation cancelled.", "warning");
+          return;
+        }
+
+        // Update current result and loop back to show confirmation.
+        currentResult = { ...formResult, dependencies: selectedDeps };
       }
 
       // ── Step 4: Extraction location ────────────────────────────────────────
