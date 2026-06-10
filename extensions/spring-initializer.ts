@@ -10,6 +10,7 @@
  * match the selected Spring Boot version.
  */
 import {
+  BorderedLoader,
   DynamicBorder,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
@@ -26,26 +27,55 @@ import {
 } from "@earendil-works/pi-tui";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as zlib from "node:zlib";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Metadata loading
+// Primary:  GET https://start.spring.io  (Accept: application/json)
+// Fallback: metadata.json in the current working directory
 // ─────────────────────────────────────────────────────────────────────────────
 
-let metadata: any = null;
+const SPRING_INITIALIZR_URL = "https://start.spring.io";
+const FETCH_TIMEOUT_MS = 10_000;
 
-function loadMetadata(cwd: string): any {
-  if (metadata) return metadata;
+/** Resolved once and cached for the lifetime of the session. */
+let metadataCache: any = null;
 
+async function loadMetadata(cwd: string): Promise<any> {
+  if (metadataCache !== null) return metadataCache;
+
+  // ── 1. Try the live Spring Initializr endpoint ───────────────────────────
+  try {
+    const res = await fetch(SPRING_INITIALIZR_URL, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (res.ok) {
+      metadataCache = await res.json();
+      return metadataCache;
+    }
+    console.error(
+      `start.spring.io returned ${res.status} ${res.statusText} — falling back to metadata.json`,
+    );
+  } catch (e) {
+    console.error(
+      "Failed to fetch metadata from start.spring.io — falling back to metadata.json:",
+      e,
+    );
+  }
+
+  // ── 2. Fall back to the local metadata.json file ─────────────────────────
   const metadataPath = path.join(cwd, "metadata.json");
   try {
     if (fs.existsSync(metadataPath)) {
       const content = fs.readFileSync(metadataPath, "utf-8");
-      metadata = JSON.parse(content);
-      return metadata;
+      metadataCache = JSON.parse(content);
+      return metadataCache;
     }
   } catch (e) {
     console.error("Failed to load metadata.json:", e);
   }
+
   return null;
 }
 
@@ -920,6 +950,316 @@ class SpringInitForm extends Container implements Focusable {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Download URL builder
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Builds the starter.zip download URL from the metadata _links entry that
+ * corresponds to the selected project type, then appends all form values as
+ * query parameters.  The URI template suffix `{&…}` is stripped first.
+ */
+/**
+ * Converts a Spring Initializr metadata version ID into the Maven-compatible
+ * version string required by the download URL so that the generated pom.xml
+ * resolves correctly from Maven Central / Spring repos.
+ *
+ *   4.0.6.RELEASE       → 4.0.6          (.RELEASE stripped)
+ *   4.0.7.BUILD-SNAPSHOT → 4.0.7-SNAPSHOT  (BUILD- stripped, dot → hyphen)
+ *   4.1.0.RC1           → 4.1.0-RC1       (dot → hyphen before qualifier)
+ *   4.1.0.M2            → 4.1.0-M2        (dot → hyphen before qualifier)
+ *
+ * The full ID (e.g. "4.0.6.RELEASE") is still used for versionRange filtering
+ * — only the URL bootVersion parameter uses this cleaned form.
+ */
+function cleanBootVersion(version: string): string {
+  if (version.endsWith(".RELEASE")) {
+    return version.slice(0, -".RELEASE".length);
+  }
+  if (version.endsWith(".BUILD-SNAPSHOT")) {
+    return version.slice(0, -".BUILD-SNAPSHOT".length) + "-SNAPSHOT";
+  }
+  // RC1, RC2, M1, M2, …  — replace the last dot before the qualifier with a hyphen
+  return version.replace(/\.((?:RC|M)\d+)$/, "-$1");
+}
+
+function buildDownloadUrl(meta: any, result: SpringInitResult): string {
+  const linkHref: string =
+    meta?._links?.[result.type]?.href ??
+    `https://start.spring.io/starter.zip?type=${result.type}`;
+
+  // Strip the RFC-6570 template part at the end, e.g. "{&dependencies,…}"
+  const baseUrl = linkHref.replace(/\{[^}]*\}$/, "");
+
+  // Build individual key=value pairs; dependency IDs are comma-separated
+  // without percent-encoding the comma (the API accepts either form).
+  const pairs: string[] = [
+    `language=${encodeURIComponent(result.language)}`,
+    `bootVersion=${encodeURIComponent(cleanBootVersion(result.bootVersion))}`,
+    `groupId=${encodeURIComponent(result.groupId)}`,
+    `artifactId=${encodeURIComponent(result.artifactId)}`,
+    `name=${encodeURIComponent(result.name)}`,
+    `description=${encodeURIComponent(result.description)}`,
+    `packageName=${encodeURIComponent(result.packageName)}`,
+    `packaging=${encodeURIComponent(result.packaging)}`,
+    `javaVersion=${encodeURIComponent(result.javaVersion)}`,
+  ];
+
+  if (result.dependencies.length > 0) {
+    pairs.push(
+      `dependencies=${result.dependencies.map(encodeURIComponent).join(",")}`,
+    );
+  }
+
+  const sep = baseUrl.includes("?") ? "&" : "?";
+  return `${baseUrl}${sep}${pairs.join("&")}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ZIP extractor (pure Node.js, no external dependencies)
+//
+// Spring Initializr ZIPs always use data descriptors (flag bit 3), so the
+// compressed/uncompressed sizes in the local file headers are zero.  We
+// therefore read all sizes from the Central Directory at the end of the
+// archive, then seek back to the local file header to find the data offset.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ZipEntry {
+  filename: string;
+  compression: number; // 0 = stored, 8 = deflate
+  compressedSize: number;
+  uncompressedSize: number;
+  localHeaderOffset: number;
+  unixMode: number; // upper 16 bits of external file attributes
+}
+
+function parseZipCentralDirectory(buf: Buffer): ZipEntry[] {
+  // Scan backwards for the End of Central Directory signature 0x06054b50
+  let eocdOffset = -1;
+  for (let i = buf.length - 22; i >= 0; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) {
+      eocdOffset = i;
+      break;
+    }
+  }
+  if (eocdOffset === -1) throw new Error("Invalid ZIP: EOCD not found");
+
+  const numEntries = buf.readUInt16LE(eocdOffset + 10);
+  const cdOffset = buf.readUInt32LE(eocdOffset + 16);
+
+  const entries: ZipEntry[] = [];
+  let pos = cdOffset;
+
+  for (let i = 0; i < numEntries; i++) {
+    if (buf.readUInt32LE(pos) !== 0x02014b50) {
+      throw new Error(`Invalid ZIP: bad central-directory signature at ${pos}`);
+    }
+    const compression = buf.readUInt16LE(pos + 10);
+    const compressedSize = buf.readUInt32LE(pos + 20);
+    const uncompressedSize = buf.readUInt32LE(pos + 24);
+    const filenameLen = buf.readUInt16LE(pos + 28);
+    const extraLen = buf.readUInt16LE(pos + 30);
+    const commentLen = buf.readUInt16LE(pos + 32);
+    const externalAttr = buf.readUInt32LE(pos + 38);
+    const localHeaderOffset = buf.readUInt32LE(pos + 42);
+    const filename = buf
+      .subarray(pos + 46, pos + 46 + filenameLen)
+      .toString("utf-8");
+    const unixMode = (externalAttr >>> 16) & 0xffff;
+
+    entries.push({
+      filename,
+      compression,
+      compressedSize,
+      uncompressedSize,
+      localHeaderOffset,
+      unixMode,
+    });
+    pos += 46 + filenameLen + extraLen + commentLen;
+  }
+
+  return entries;
+}
+
+/**
+ * Extracts a ZIP buffer into `targetDir`, creating subdirectories and
+ * preserving Unix execute bits (needed for mvnw / gradlew).
+ */
+function extractZip(zipBuffer: Buffer, targetDir: string): void {
+  const entries = parseZipCentralDirectory(zipBuffer);
+
+  for (const entry of entries) {
+    // Sanitise the path: strip leading slashes and reject ".." components
+    const parts = entry.filename
+      .split("/")
+      .filter((p) => p !== "" && p !== "..");
+    if (parts.length === 0) continue;
+
+    const fullPath = path.join(targetDir, ...parts);
+
+    if (entry.filename.endsWith("/")) {
+      // Directory entry — just ensure it exists
+      fs.mkdirSync(fullPath, { recursive: true });
+      continue;
+    }
+
+    // Ensure parent directory exists
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+
+    // Locate file data via the local file header
+    const lfh = entry.localHeaderOffset;
+    const lfhFilenameLen = zipBuffer.readUInt16LE(lfh + 26);
+    const lfhExtraLen = zipBuffer.readUInt16LE(lfh + 28);
+    const dataOffset = lfh + 30 + lfhFilenameLen + lfhExtraLen;
+
+    const compressed = zipBuffer.subarray(
+      dataOffset,
+      dataOffset + entry.compressedSize,
+    );
+
+    let fileData: Buffer;
+    if (entry.compression === 0) {
+      fileData = Buffer.from(compressed); // stored
+    } else if (entry.compression === 8) {
+      fileData = zlib.inflateRawSync(compressed); // deflate
+    } else {
+      throw new Error(
+        `Unsupported compression method ${entry.compression} for "${entry.filename}"`,
+      );
+    }
+
+    fs.writeFileSync(fullPath, fileData);
+
+    // Restore Unix permissions (important for mvnw / gradlew)
+    if (entry.unixMode !== 0) {
+      try {
+        fs.chmodSync(fullPath, entry.unixMode & 0o777);
+      } catch {
+        // chmod may not be supported on all platforms — non-fatal
+      }
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ConfirmationComponent
+// ─────────────────────────────────────────────────────────────────────────────
+
+class ConfirmationComponent extends Container {
+  /** Satisfies the focused-property contract; no input widgets need IME. */
+  focused = false;
+
+  private readonly onConfirm: (confirmed: boolean) => void;
+
+  constructor(
+    theme: Theme,
+    result: SpringInitResult,
+    meta: any,
+    onConfirm: (confirmed: boolean) => void,
+  ) {
+    super();
+    this.onConfirm = onConfirm;
+    this.build(theme, result, meta);
+  }
+
+  private build(theme: Theme, result: SpringInitResult, meta: any): void {
+    const t = theme;
+
+    // ── Look up human-readable display names from metadata ──
+    const label = (values: any[], id: string) =>
+      values?.find((v: any) => v.id === id)?.name ?? id;
+
+    const typeName = label(meta?.type?.values ?? [], result.type);
+    const languageName = label(meta?.language?.values ?? [], result.language);
+    const bootName = label(
+      meta?.bootVersion?.values ?? [],
+      result.bootVersion,
+    );
+    const packagingName = label(
+      meta?.packaging?.values ?? [],
+      result.packaging,
+    );
+    const javaName = label(
+      meta?.javaVersion?.values ?? [],
+      result.javaVersion,
+    );
+
+    const depNames = result.dependencies.map((id) => {
+      for (const cat of meta?.dependencies?.values ?? []) {
+        const dep = (cat.values ?? []).find((d: any) => d.id === id);
+        if (dep) return dep.name as string;
+      }
+      return id;
+    });
+
+    // ── Render ──
+    const LW = 16; // label column width
+    const row = (lbl: string, val: string) =>
+      new Text(
+        `  ${t.fg("muted", lbl.padEnd(LW))}  ${t.fg("text", val)}`,
+        0,
+        0,
+      );
+
+    this.addChild(new DynamicBorder((s: string) => t.fg("accent", s)));
+    this.addChild(
+      new Text(t.fg("accent", t.bold("Confirm Project Generation")), 1, 0),
+    );
+    this.addChild(new Text(""));
+
+    this.addChild(row("Project Type", typeName));
+    this.addChild(row("Language", languageName));
+    this.addChild(row("Spring Boot", bootName));
+    this.addChild(row("Group ID", result.groupId));
+    this.addChild(row("Artifact ID", result.artifactId));
+    this.addChild(row("Packaging", packagingName));
+    this.addChild(row("Java Version", javaName));
+
+    this.addChild(new Text(""));
+
+    if (depNames.length === 0) {
+      this.addChild(
+        new Text(t.fg("dim", "  No dependencies selected"), 0, 0),
+      );
+    } else {
+      this.addChild(
+        new Text(
+          t.fg("muted", `  Dependencies (${depNames.length}):`),
+          0,
+          0,
+        ),
+      );
+      for (const name of depNames) {
+        this.addChild(
+          new Text(t.fg("text", `    ● ${name}`), 0, 0),
+        );
+      }
+    }
+
+    this.addChild(new Text(""));
+    this.addChild(
+      new Text(
+        t.fg("dim", "  Enter / Y  generate project     Esc / N  cancel"),
+        0,
+        0,
+      ),
+    );
+    this.addChild(new DynamicBorder((s: string) => t.fg("accent", s)));
+  }
+
+  handleInput(keyData: string): void {
+    if (matchesKey(keyData, Key.enter) || keyData === "y" || keyData === "Y") {
+      this.onConfirm(true);
+    } else if (
+      matchesKey(keyData, Key.escape) ||
+      keyData === "n" ||
+      keyData === "N"
+    ) {
+      this.onConfirm(false);
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Helper: run a TUI overlay and return the result
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -965,7 +1305,7 @@ export default function springInitializer(pi: ExtensionAPI) {
     description:
       "Open Spring Initializer form to configure a new Spring Boot project",
     handler: async (args, ctx) => {
-      const meta = loadMetadata(ctx.cwd);
+      const meta = await loadMetadata(ctx.cwd);
 
       if (!ctx.hasUI) {
         console.log("Error: No UI available for Spring Initializer");
@@ -1022,24 +1362,126 @@ export default function springInitializer(pi: ExtensionAPI) {
         },
       );
 
-      // ── Combine and output ─────────────────────────────────────────────────
       const finalResult: SpringInitResult = {
         ...formResult,
         dependencies: selectedDeps,
       };
 
-      const json = JSON.stringify(finalResult, null, 2);
-      console.log(json);
-
-      const depCount = finalResult.dependencies.length;
-      ctx.ui.notify(
-        `Spring project configured${
-          depCount > 0
-            ? ` with ${depCount} dependenc${depCount === 1 ? "y" : "ies"}`
-            : " (no dependencies)"
-        }!`,
-        "success",
+      // ── Step 3: Confirmation ───────────────────────────────────────────────
+      const confirmed = await ctx.ui.custom<boolean>(
+        (tui, theme, _kb, done) => {
+          const comp = new ConfirmationComponent(
+            theme,
+            finalResult,
+            meta,
+            done,
+          );
+          return {
+            focused: false,
+            render: (w: number) => comp.render(w),
+            invalidate: () => comp.invalidate(),
+            handleInput: (data: string) => {
+              comp.handleInput(data);
+              tui.requestRender();
+            },
+          };
+        },
+        {
+          overlay: true,
+          overlayOptions: {
+            width: "60%",
+            maxHeight: "80%",
+            anchor: "center",
+          },
+        },
       );
+
+      if (!confirmed) {
+        ctx.ui.notify("Project generation cancelled.", "warning");
+        return;
+      }
+
+      // ── Step 4: Download ───────────────────────────────────────────────────
+      const downloadUrl = buildDownloadUrl(meta, finalResult);
+
+      type DownloadResult =
+        | { ok: true; buffer: ArrayBuffer }
+        | { ok: false; error: string }
+        | null;
+
+      const dlResult = await ctx.ui.custom<DownloadResult>(
+        (tui, theme, _kb, done) => {
+          const loader = new BorderedLoader(
+            tui,
+            theme,
+            `Downloading ${finalResult.artifactId}.zip…`,
+          );
+          loader.onAbort = () => done(null);
+
+          fetch(downloadUrl, { signal: loader.signal })
+            .then(async (res) => {
+              if (!res.ok) {
+                done({
+                  ok: false,
+                  error: `HTTP ${res.status}: ${res.statusText}`,
+                });
+                return;
+              }
+              const buffer = await res.arrayBuffer();
+              done({ ok: true, buffer });
+            })
+            .catch((err: unknown) => {
+              if ((err as { name?: string }).name !== "AbortError") {
+                done({ ok: false, error: String(err) });
+              }
+            });
+
+          return loader;
+        },
+        {
+          overlay: true,
+          overlayOptions: {
+            width: "50%",
+            maxHeight: "20%",
+            anchor: "center",
+          },
+        },
+      );
+
+      // ── Step 5: Extract or report error ───────────────────────────────────
+      if (dlResult === null) {
+        ctx.ui.notify("Download cancelled.", "warning");
+        return;
+      }
+
+      if (!dlResult.ok) {
+        ctx.ui.notify(
+          `Download failed \u2014 ${dlResult.error}`,
+          "error",
+        );
+        return;
+      }
+
+      try {
+        const zipBuffer = Buffer.from(dlResult.buffer);
+        const projectDir = path.join(ctx.cwd, finalResult.artifactId);
+        fs.mkdirSync(projectDir, { recursive: true });
+        extractZip(zipBuffer, projectDir);
+
+        const depCount = finalResult.dependencies.length;
+        ctx.ui.notify(
+          `✓ Project extracted to ${projectDir}` +
+            (depCount > 0
+              ? ` (${depCount} dependenc${depCount === 1 ? "y" : "ies"})`
+              : ""),
+          "success",
+        );
+      } catch (err: unknown) {
+        ctx.ui.notify(
+          `Extraction failed \u2014 ${String(err)}`,
+          "error",
+        );
+      }
     },
   });
 }
