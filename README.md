@@ -9,6 +9,12 @@ A collection of [pi](https://github.com/earendil-works/pi-coding-agent) extensio
 | [Form](docs/form-extension.md) | `/form <file.json>` | Render any interactive form from a JSON definition file |
 | [Spring Initializr](docs/spring-initializr-extension.md) | `/spring-init` | Scaffold a full Spring Boot project with live metadata, dependency picker, and ZIP extraction |
 
+## Skills
+
+| Skill | Command | Description |
+|-------|---------|-------------|
+| [Commit](#commit-skill) | `/skill:commit` | Craft and execute git commits following the Conventional Commits specification |
+
 ---
 
 ## Quick Start
@@ -64,6 +70,30 @@ Arguments are resolved in order: language (`java`/`kotlin`/`groovy`), build tool
 
 ---
 
+## Commit Skill
+
+The **Commit** skill guides the agent through crafting and executing git commits that follow the [Conventional Commits](https://www.conventionalcommits.org/) specification. It inspects staged and unstaged changes, selects the right commit type (`feat`, `fix`, `docs`, `refactor`, etc.), determines an optional scope, flags breaking changes, and composes a properly structured commit message — then shows it to you for confirmation before committing.
+
+**Trigger it:**
+```
+/skill:commit
+```
+
+Or just describe what you want and the agent will load the skill automatically:
+```
+commit my changes using conventional commits
+```
+
+**What it handles:**
+- Staging files (specific files or all changes)
+- Choosing the correct type and scope
+- Breaking change notation via `!` prefix and/or `BREAKING CHANGE` footer
+- Commit body and footer formatting
+- Confirmation before committing
+- Post-commit verification with `git log`
+
+---
+
 ## Project Structure
 
 ```
@@ -71,6 +101,9 @@ extensions/
 ├── extensions/
 │   ├── form.ts                   # Generic form extension
 │   └── spring-initializer.ts     # Spring Initializr extension
+├── skills/
+│   └── commit/
+│       └── SKILL.md              # Conventional Commits skill
 ├── docs/
 │   ├── form-extension.md         # Form extension documentation
 │   └── spring-initializr-extension.md  # Spring Initializr documentation
