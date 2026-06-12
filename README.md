@@ -45,12 +45,20 @@ form { "formFile": "spring-initializr-form.json" }
 
 ## Spring Initializr Extension
 
-The **Spring Initializr** extension is a complete, guided workflow for bootstrapping a new Spring Boot project directly from within pi. It fetches live project metadata from `https://start.spring.io`, walks you through a 4-screen wizard (project config → dependency picker → confirmation → extraction location), downloads the generated ZIP, and extracts it — all without leaving your terminal.
+The **Spring Initializr** extension is a complete, guided workflow for bootstrapping a new Spring Boot project directly from within pi. It fetches live project metadata from `https://start.spring.io`, opens a confirmation screen pre-populated with defaults, lets you optionally edit settings or pick dependencies, then downloads the generated ZIP and extracts it — all without leaving your terminal.
 
 **Trigger it:**
 ```
 /spring-init
 ```
+
+Optional arguments pre-populate the wizard without going through the form:
+```
+/spring-init maven 17 web
+/spring-init kotlin gradle 21 web actuator
+```
+
+Arguments are resolved in order: language (`java`/`kotlin`/`groovy`), build tool (`maven`/`gradle`), Java version (integer), and any remaining tokens as dependency IDs or fuzzy-matched dependency names.
 
 → [Full documentation](docs/spring-initializr-extension.md)
 

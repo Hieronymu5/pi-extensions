@@ -9,10 +9,11 @@ The Spring Initializr extension is a complete, guided project-scaffolding workfl
 ## Table of Contents
 
 - [Usage](#usage)
+- [Command Arguments](#command-arguments)
 - [Workflow Overview](#workflow-overview)
-- [Step 1 — Project Configuration Form](#step-1--project-configuration-form)
-- [Step 2 — Dependency Picker](#step-2--dependency-picker)
-- [Step 3 — Confirmation Screen](#step-3--confirmation-screen)
+- [Step 1 — Confirmation Screen](#step-1--confirmation-screen)
+- [Step 2 — Project Configuration Form](#step-2--project-configuration-form)
+- [Step 3 — Dependency Picker](#step-3--dependency-picker)
 - [Step 4 — Extraction Location](#step-4--extraction-location)
 - [Step 5 — Download](#step-5--download)
 - [Step 6 — ZIP Extraction](#step-6--zip-extraction)
@@ -31,45 +32,93 @@ The Spring Initializr extension is a complete, guided project-scaffolding workfl
 ## Usage
 
 ```
-/spring-init
+/spring-init [language] [build-tool] [java-version] [dependency...]
 ```
 
-No arguments are required. The command fetches live metadata from Spring Initializr and guides you through the full wizard.
+No arguments are required — the wizard opens immediately at the [Confirmation Screen](#step-1--confirmation-screen) with all settings pre-populated from metadata defaults. Optional arguments let you skip the form entirely by overriding specific values before the wizard opens.
+
+**Examples:**
+
+```
+/spring-init
+/spring-init maven 17 web
+/spring-init kotlin gradle 21 web actuator
+/spring-init groovy 17 data-jpa
+```
+
+See [Command Arguments](#command-arguments) for full details.
+
+---
+
+## Command Arguments
+
+Any tokens passed after `/spring-init` are parsed and merged with metadata defaults before the wizard opens. This lets you skip the configuration form entirely for common cases.
+
+| Token type | Example | Effect |
+|------------|---------|--------|
+| Language name | `java`, `kotlin`, `groovy` | Sets the language field |
+| Build tool | `maven`, `gradle` | Sets `maven-project` or `gradle-project` |
+| Integer | `17`, `21`, `11` | Sets the Java version (matched against known values) |
+| Dependency ID/name | `web`, `actuator`, `data-jpa` | Pre-selects a dependency (exact ID match first, then fuzzy) |
+
+Tokens that do not match a language, build tool, or Java version are resolved as dependency IDs. Exact ID matches take priority; otherwise the top fuzzy-search result for the token is used.
+
+**Dependency matching uses the metadata default Boot version** for compatibility filtering — only dependencies compatible with the default version can be pre-selected via args. The full dependency catalogue is always available inside the picker itself.
+
+All argument-derived values are shown on the Confirmation Screen first. You can accept them immediately with **Enter** or edit any setting before proceeding.
 
 ---
 
 ## Workflow Overview
 
 ```
-/spring-init
+/spring-init [args]
      │
      ▼
 ① Load metadata ──── live: https://start.spring.io
      │                fallback: ./metadata.json
      ▼
-② Project config form  (type, language, boot version, group, artifact, packaging, java)
+② Parse args → pre-populate with language, build tool, Java version, dependencies
      │
      ▼
-③ Dependency picker  (fuzzy search + version-range filtering)
+③ Confirmation screen  (shown first — review defaults and current selections)
+     │
+     ├── [E] Edit settings ──► ④ Project config form ─► ⑤ Dependency picker ─► ③
+     │
+     ├── [D] Edit deps ─────────────────────────► ⑤ Dependency picker ─► ③
+     │
+     └── [Enter/Y] Proceed
+          │
+          ▼
+⑥ Extraction location  (new project folder  vs.  current folder)
      │
      ▼
-④ Confirmation screen  (review all selections)
+⑦ Download  starter.zip  from start.spring.io
      │
      ▼
-⑤ Extraction location  (new project folder  vs.  current folder)
-     │
-     ▼
-⑥ Download  starter.zip  from start.spring.io
-     │
-     ▼
-⑦ Extract ZIP  →  filesystem  (unix perms preserved)
+⑧ Extract ZIP  →  filesystem  (unix perms preserved)
 ```
 
 ---
 
-## Step 1 — Project Configuration Form
+## Step 1 — Confirmation Screen
 
-A `SpringInitForm` overlay collects the seven core project settings. All option lists are populated directly from the live (or cached) Spring Initializr metadata, so they always reflect the currently supported versions and languages.
+The wizard **always opens at the Confirmation Screen** — it is shown before any editing takes place. All fields are pre-populated from live metadata defaults (merged with any [command arguments](#command-arguments) provided). From here you can confirm immediately or drill into either the project settings or the dependency picker.
+
+| Key | Action |
+|-----|--------|
+| **Enter** or **Y** | Confirm and proceed to extraction location |
+| **E** | Open the Project Configuration Form to edit settings |
+| **D** | Open the Dependency Picker to change selected dependencies |
+| **Esc** or **N** | Cancel — no download is performed |
+
+After editing settings (**E**) or dependencies (**D**), the wizard returns to the Confirmation Screen with the updated values so you can review before proceeding.
+
+---
+
+## Step 2 — Project Configuration Form
+
+Accessed by pressing **E** on the Confirmation Screen. A `SpringInitForm` overlay collects the seven core project settings. All option lists are populated directly from the live (or cached) Spring Initializr metadata, so they always reflect the currently supported versions and languages.
 
 | # | Field | Type | Default |
 |---|-------|------|---------|
@@ -87,14 +136,14 @@ A `SpringInitForm` overlay collects the seven core project settings. All option 
 
 Four fields are visible at a time; scrolling indicators (`↑ N more above` / `↓ N more below`) appear when the list overflows.
 
-Two derived fields are automatically added to the result at submit time:
+Pressing **Enter** on any field submits the entire form immediately — it does not advance to the next field. Use **Tab** / **Shift+Tab** to move between fields. On submit, two derived fields are added automatically:
 - `name` — copied from `artifactId`
 - `packageName` — interpolated as `${groupId}.${artifactId}`
 - `description` — set to `"Demo project for Spring Boot"`
 
 ---
 
-## Step 2 — Dependency Picker
+## Step 3 — Dependency Picker
 
 After the project form is submitted, a `DependencyPickerComponent` overlay displays the full Spring Initializr dependency catalogue, pre-filtered to only include dependencies compatible with the selected Spring Boot version.
 
@@ -102,25 +151,16 @@ After the project form is submitted, a `DependencyPickerComponent` overlay displ
 
 - **Live search** — Type any text to fuzzy-search across dependency names, IDs, descriptions, and categories simultaneously.
 - **Version-range filtering** — Dependencies whose `versionRange` is incompatible with the selected Boot version are excluded before the picker opens. The header shows the compatible count.
-- **Multi-select** — Toggle individual dependencies on/off with **Space** or **Enter**. Selected items are shown with a `[✓]` checkbox in green; the current highlight is shown in accent colour.
+- **Multi-select** — Toggle individual dependencies on/off with **Space**. Selected items are shown with a `[✓]` checkbox in green; the current highlight is shown in accent colour.
 - **Scrolling list** — Up to 7 results are visible at once; `↑ N more above` / `↓ N more below` indicators appear when the filtered list overflows.
 - **Detail line** — The highlighted dependency shows its category and description in a compact secondary line below the item.
 - **Selection summary** — The bottom of the overlay always shows the count and names of currently selected dependencies (up to 4 names, then `+N more`).
 
-Press **Esc** to confirm your selection (including zero dependencies) and advance to the next step.
+Press **Enter** to confirm the current selection (including zero dependencies) and return to the Confirmation Screen with the updated list. Press **Esc** to go back to the Confirmation Screen without applying any changes.
 
 ---
 
-## Step 3 — Confirmation Screen
-
-A `ConfirmationComponent` overlay shows a summary of all selections before any network request is made.
-
-The summary displays human-readable display names (looked up from metadata) for all enum-style fields, plus a bulleted list of selected dependency names. If no dependencies were selected, a "No dependencies selected" message is shown instead.
-
-| Key | Action |
-|-----|--------|
-| **Enter** or **Y** | Confirm and proceed to extraction location |
-| **Esc** or **N** | Cancel — no download is performed |
+> The Confirmation Screen is described in full in [Step 1](#step-1--confirmation-screen) above. It is shown first when the command runs and is revisited automatically after every edit cycle.
 
 ---
 
@@ -290,6 +330,15 @@ The ZIP is extracted entirely in pure Node.js using the `zlib` built-in module �
 
 ## Keyboard Controls
 
+### Confirmation Screen
+
+| Key | Action |
+|-----|--------|
+| **Enter** or **Y** | Confirm and proceed to extraction location |
+| **E** | Open the Project Configuration Form to edit settings |
+| **D** | Open the Dependency Picker to change selected dependencies |
+| **Esc** or **N** | Cancel — no download is performed |
+
 ### Project Configuration Form
 
 | Key | Action |
@@ -297,25 +346,19 @@ The ZIP is extracted entirely in pure Node.js using the `zlib` built-in module �
 | **Tab** | Move to the next field (wraps around) |
 | **Shift+Tab** | Move to the previous field (wraps around) |
 | **↑ / ↓** | On select fields: scroll options. On text fields: move between fields. |
-| **Enter** | Advance to next field (or submit on last field) |
-| **Esc** | Cancel the wizard |
+| **Enter** | Submit the form immediately (from any field) |
+| **Esc** | Cancel edit — return to the Confirmation Screen unchanged |
 
 ### Dependency Picker
 
 | Key | Action |
 |-----|--------|
 | **↑ / ↓** | Move highlight up/down the results list |
-| **Space** or **Enter** | Toggle the highlighted dependency on/off |
+| **Space** | Toggle the highlighted dependency on/off |
+| **Enter** | Confirm the current selection and return to the Confirmation Screen |
 | **Any other key** | Append to / edit the search query |
 | **Backspace** | Delete last character from search query |
-| **Esc** | Confirm selection (including zero dependencies) and proceed |
-
-### Confirmation Screen
-
-| Key | Action |
-|-----|--------|
-| **Enter** or **Y** | Confirm and proceed |
-| **Esc** or **N** | Cancel |
+| **Esc** | Go back to the Confirmation Screen without applying changes |
 
 ### Extraction Location
 
