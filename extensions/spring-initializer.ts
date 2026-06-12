@@ -1167,13 +1167,13 @@ class ConfirmationComponent extends Container {
   /** Satisfies the focused-property contract; no input widgets need IME. */
   focused = false;
 
-  private readonly onConfirm: (action: "confirm" | "cancel" | "edit") => void;
+  private readonly onConfirm: (action: "confirm" | "cancel" | "edit" | "deps") => void;
 
   constructor(
     theme: Theme,
     result: SpringInitResult,
     meta: any,
-    onConfirm: (action: "confirm" | "cancel" | "edit") => void,
+    onConfirm: (action: "confirm" | "cancel" | "edit" | "deps") => void,
   ) {
     super();
     this.onConfirm = onConfirm;
@@ -1257,7 +1257,7 @@ class ConfirmationComponent extends Container {
     this.addChild(new Text(""));
     this.addChild(
       new Text(
-        t.fg("dim", "  Enter / Y  generate     E  edit settings     Esc / N  cancel"),
+        t.fg("dim", "  Enter/Y generate   E edit settings   D dependencies   Esc/N cancel"),
         0,
         0,
       ),
@@ -1270,6 +1270,8 @@ class ConfirmationComponent extends Container {
       this.onConfirm("confirm");
     } else if (keyData === "e" || keyData === "E") {
       this.onConfirm("edit");
+    } else if (keyData === "d" || keyData === "D") {
+      this.onConfirm("deps");
     } else if (
       matchesKey(keyData, Key.escape) ||
       keyData === "n" ||
@@ -1587,7 +1589,7 @@ export default function springInitializer(pi: ExtensionAPI) {
 
       while (true) {
         // ── Step 1: Confirmation (shown first with defaults pre-populated) ────
-        const confirmAction = await ctx.ui.custom<"confirm" | "cancel" | "edit">(
+        const confirmAction = await ctx.ui.custom<"confirm" | "cancel" | "edit" | "deps">(
           (tui, theme, _kb, done) => {
             const comp = new ConfirmationComponent(
               theme,
@@ -1619,6 +1621,31 @@ export default function springInitializer(pi: ExtensionAPI) {
         if (confirmAction === "confirm") {
           finalResult = currentResult;
           break;
+        }
+
+        // ── Step 2a (deps path): Dependency picker launched directly from summary ──
+        if (confirmAction === "deps") {
+          const selectedDeps = await ctx.ui.custom<string[] | null>(
+            (tui, theme, _keybindings, done) =>
+              makeRootWrapper(tui, () =>
+                new DependencyPickerComponent(
+                  theme,
+                  meta,
+                  currentResult.bootVersion,
+                  (ids) => done(ids),
+                  currentResult.dependencies,
+                ),
+              ),
+            {
+              overlay: true,
+              overlayOptions: { width: "70%", maxHeight: "85%", anchor: "center" },
+            },
+          );
+          // Esc in the picker returns null — go back to summary without changes.
+          if (selectedDeps !== null) {
+            currentResult = { ...currentResult, dependencies: selectedDeps };
+          }
+          continue;
         }
 
         // ── Step 2 (edit path): Project configuration form ───────────────────
@@ -1667,10 +1694,9 @@ export default function springInitializer(pi: ExtensionAPI) {
           },
         );
 
-        // Esc in the dependency picker cancels the whole initializer.
+        // Esc in the dependency picker goes back to summary without changes.
         if (selectedDeps === null) {
-          ctx.ui.notify("Project generation cancelled.", "warning");
-          return;
+          continue;
         }
 
         // Update current result and loop back to show confirmation.
