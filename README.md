@@ -13,7 +13,6 @@ A collection of [pi](https://github.com/earendil-works/pi-coding-agent) extensio
 
 | Skill | Command | Description |
 |-------|---------|-------------|
-| [Commit](#commit-skill) | `/skill:commit` | Craft and execute git commits following the Conventional Commits specification |
 | [Spring Init](#spring-init-skill) | `/skill:spring-init` | Scaffold a new Spring Boot project via Spring Initializr with live metadata and dependency selection |
 
 ## Prompt Templates
@@ -111,35 +110,9 @@ scaffold a new Spring Boot project called order-service
 
 ---
 
-## Commit Skill
-
-The **Commit** skill guides the agent through crafting and executing git commits that follow the [Conventional Commits](https://www.conventionalcommits.org/) specification. It inspects staged and unstaged changes, selects the right commit type (`feat`, `fix`, `docs`, `refactor`, etc.), determines an optional scope, flags breaking changes, and composes a properly structured commit message — then shows it to you for confirmation before committing.
-
-**Trigger it:**
-```
-/skill:commit
-```
-
-Or just describe what you want and the agent will load the skill automatically:
-```
-commit my changes using conventional commits
-```
-
-> **Tip:** For a quicker, editor-side shortcut that does the same job, use the `/commit` prompt template instead.
-
-**What it handles:**
-- Staging files (specific files or all changes)
-- Choosing the correct type and scope
-- Breaking change notation via `!` prefix and/or `BREAKING CHANGE` footer
-- Commit body and footer formatting
-- Confirmation before committing
-- Post-commit verification with `git log`
-
----
-
 ## Commit Prompt Template
 
-The **Commit** prompt template is a lightweight, editor-side shortcut that does everything the Commit skill does, but is invoked as a slash-command directly in pi's message input. It expands into a self-contained step-by-step prompt that drives the agent through the full Conventional Commits workflow.
+The **Commit** prompt template is a lightweight, editor-side shortcut invoked directly in pi's message input. It expands into a self-contained step-by-step prompt that drives the agent through the full Conventional Commits workflow.
 
 **Trigger it by typing in pi's editor:**
 ```
@@ -147,14 +120,6 @@ The **Commit** prompt template is a lightweight, editor-side shortcut that does 
 ```
 
 pi will autocomplete the template name as you type. Pressing Enter injects the full prompt and immediately starts the commit workflow.
-
-**How it differs from `/skill:commit`:**
-
-| | `/commit` (prompt template) | `/skill:commit` (skill) |
-|---|---|---|
-| Invocation | Typed directly in the message editor | Slash-command or natural language |
-| Loading mechanism | Expanded inline as a prompt | Loaded by the agent from `SKILL.md` |
-| Best for | Quick, interactive use | Programmatic or workflow-driven commits |
 
 **Location:** `.pi/prompts/commit.md` — loaded automatically as a project-level prompt template whenever the project is trusted.
 
@@ -171,8 +136,6 @@ extensions/
 │   ├── form.ts                   # Generic form extension
 │   └── spring-initializer.ts     # Spring Initializr extension
 ├── skills/
-│   ├── commit/
-│   │   └── SKILL.md              # Conventional Commits skill (/skill:commit)
 │   └── spring-init/
 │       ├── SKILL.md              # Spring Initializr skill (/skill:spring-init)
 │       ├── scripts/
