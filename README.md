@@ -2,6 +2,8 @@
 
 A collection of [pi](https://github.com/earendil-works/pi-coding-agent) extensions that add interactive TUI overlays and productivity tools to your AI coding sessions.
 
+![Pi Agent Harness](diagrams/pi_agent_harness.png)
+
 ## Extensions
 
 | Extension | Command | Description |
@@ -144,6 +146,8 @@ extensions/
 ├── docs/
 │   ├── form-extension.md         # Form extension documentation
 │   └── spring-initializr-extension.md  # Spring Initializr documentation
+├── diagrams/
+│   └── pi_agent_harness.svg          # Architecture diagram
 ├── forms/
 │   └── spring-initializr-form.json  # Form definition for Spring Initializr
 ├── metadata.json                 # Offline fallback metadata from start.spring.io
