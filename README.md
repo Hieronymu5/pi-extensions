@@ -152,6 +152,7 @@ extensions/
 │   └── spring-initializr-form.json  # Form definition for Spring Initializr
 ├── metadata.json                 # Offline fallback metadata from start.spring.io
 ├── package.json
+├── LICENSE                       # MIT License
 └── README.md
 ```
 
@@ -170,4 +171,6 @@ extensions/
 
 ## License
 
-See repository for license details.
+This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for the full text.
+
+Copyright (c) 2026 Hieronymu5
