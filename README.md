@@ -2,7 +2,7 @@
 
 A collection of [pi](https://github.com/earendil-works/pi-coding-agent) extensions that add interactive TUI overlays and productivity tools to your AI coding sessions.
 
-![Pi Agent Harness](diagrams/pi_agent_harness.png)
+![Pi Agent Harness](diagrams/pi_agent_harness-dark.png)
 
 ## Extensions
 
